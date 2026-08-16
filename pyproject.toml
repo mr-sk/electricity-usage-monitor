@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "electricity-usage-monitor"
+version = "0.1.0"
+description = "Open-sourceable electricity usage and time-of-use bill projection tools."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "electricity-usage-monitor contributors" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+browser = ["playwright>=1.45"]
+
+[project.scripts]
+electricity-monitor = "electricity_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
