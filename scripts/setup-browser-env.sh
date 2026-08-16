@@ -11,4 +11,4 @@ python3 -m venv .venv
 
 echo ""
 echo "Ready. Use:"
-echo "  .venv/bin/python tools/record_mymeter_export.py --base-url https://mysmartenergy.psegliny.com --start-url https://www.psegliny.com/myaccount --user-data-dir private/mymeter-browser --storage-state private/mymeter-storage.json --request-out private/download-request.json --downloads data/discovery"
+echo "  .venv/bin/python tools/record_mymeter_export.py --base-url https://mysmartenergy.psegliny.com --start-url https://mysmartenergy.psegliny.com/Dashboard/ --user-data-dir private/mymeter-browser --storage-state private/mymeter-storage.json --request-out private/download-request.json --downloads data/discovery"

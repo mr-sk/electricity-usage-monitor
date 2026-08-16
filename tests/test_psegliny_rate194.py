@@ -12,6 +12,7 @@ from electricity_monitor.billing import Projection, bill_period_usage, split_int
 from electricity_monitor.cli import format_summary_report
 from electricity_monitor.importers.csv_interval import read_interval_csv
 from electricity_monitor.models import IntervalUsage
+from electricity_monitor.mymeter import _write_download_body
 from electricity_monitor.providers import get_provider
 
 
@@ -99,6 +100,16 @@ class PsegLiRate194Tests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "download returned HTML"):
                 read_interval_csv(path, ZoneInfo("America/New_York"))
+
+    def test_mymeter_download_rejects_html_without_overwriting_existing_file(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "latest.csv"
+            path.write_text("Start,kWh\n08/01/2026 12:00:00 AM,1.0\n")
+
+            with self.assertRaisesRegex(RuntimeError, "download returned HTML"):
+                _write_download_body(path, b"<!doctype html><html><body>login</body></html>")
+
+            self.assertEqual(path.read_text(), "Start,kWh\n08/01/2026 12:00:00 AM,1.0\n")
 
 
 if __name__ == "__main__":

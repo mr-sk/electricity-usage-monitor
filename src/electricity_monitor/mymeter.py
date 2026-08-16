@@ -98,6 +98,22 @@ def cookie_header_from_playwright_storage(path: Union[str, Path], base_url: str)
     return "; ".join(pairs)
 
 
+def _looks_like_html(body: bytes) -> bool:
+    sample = body[:4096].decode("utf-8", errors="ignore").lstrip().lower()
+    return sample.startswith("<!doctype html") or sample.startswith("<html") or "<form" in sample and "/home/login" in sample
+
+
+def _write_download_body(output: Union[str, Path], body: bytes) -> Path:
+    if _looks_like_html(body):
+        raise RuntimeError("download returned HTML instead of usage data; authenticated session may have expired")
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_name(out_path.name + ".tmp")
+    tmp_path.write_bytes(body)
+    tmp_path.replace(out_path)
+    return out_path
+
+
 class MyMeterSession:
     def __init__(self, base_url: str, storage_state: Union[str, Path]) -> None:
         self.base_url = base_url.rstrip("/")
@@ -148,15 +164,13 @@ class MyMeterSession:
             headers=headers,
             method=replay.method,
         )
-        out_path = Path(output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
-                out_path.write_bytes(resp.read())
+                body = resp.read()
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"download HTTP error {exc.code}: {body}") from exc
-        return out_path
+        return _write_download_body(output, body)
 
 
 def _token_context_path(url: str) -> str:
@@ -264,15 +278,13 @@ class MyMeterCredentialSession:
             encoded = urllib.parse.urlencode(data).encode("utf-8")
             headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
         req = urllib.request.Request(self._absolute_url(replay.url), data=encoded, headers=headers, method=method)
-        out_path = Path(output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with self.opener.open(req, timeout=120) as resp:
-                out_path.write_bytes(resp.read())
+                body = resp.read()
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"download HTTP error {exc.code}: {body}") from exc
-        return out_path
+        return _write_download_body(output, body)
 
 
 def load_env_file(path: Union[str, Path]) -> None:
