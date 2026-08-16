@@ -4,10 +4,13 @@ import unittest
 from argparse import Namespace
 from datetime import date
 from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from zoneinfo import ZoneInfo
 
 from electricity_monitor.billing import Projection, bill_period_usage, split_intervals_by_period
 from electricity_monitor.cli import format_summary_report
+from electricity_monitor.importers.csv_interval import read_interval_csv
 from electricity_monitor.models import IntervalUsage
 from electricity_monitor.providers import get_provider
 
@@ -88,6 +91,14 @@ class PsegLiRate194Tests(unittest.TestCase):
         self.assertIn("Last billing cycle price: $671.29", output)
         self.assertIn("Last billing cycle usage: 2,419.0 kWh total; 335.0 peak / 2,084.0 off-peak", output)
         self.assertIn("Did pricing of electricity change: no", output)
+
+    def test_csv_import_rejects_html_downloads(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "usage.csv"
+            path.write_text("\n\n<!doctype html><html><body>login</body></html>\n")
+
+            with self.assertRaisesRegex(ValueError, "download returned HTML"):
+                read_interval_csv(path, ZoneInfo("America/New_York"))
 
 
 if __name__ == "__main__":

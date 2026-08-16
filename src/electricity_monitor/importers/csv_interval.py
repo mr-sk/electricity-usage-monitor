@@ -36,9 +36,13 @@ def read_interval_csv(path: Union[str, Path], tz: ZoneInfo, interval_minutes: in
     """
     rows: list[IntervalUsage] = []
     with Path(path).open(newline="") as fh:
-        reader = csv.DictReader(fh)
+        sample = fh.read(4096)
+        if "<html" in sample.lower() or "<!doctype html" in sample.lower():
+            raise ValueError("download returned HTML instead of interval CSV; authenticated session may have expired")
+        fh.seek(0)
+        reader = csv.DictReader(line for line in fh if line.strip())
         if not reader.fieldnames:
-            return rows
+            raise ValueError("CSV is empty")
         fields = {name.strip().lower(): name for name in reader.fieldnames}
         if "kwh" not in fields:
             raise ValueError("CSV must include a kwh column")
