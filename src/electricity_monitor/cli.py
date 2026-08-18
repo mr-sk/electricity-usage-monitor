@@ -11,8 +11,10 @@ from .importers import read_green_button_xml, read_interval_csv
 import os
 
 from .mymeter import (
+    MyMeterBrowserSession,
     MyMeterCredentialSession,
     MyMeterSession,
+    add_mymeter_browser_download_args,
     add_mymeter_download_args,
     add_mymeter_login_args,
     load_env_file,
@@ -181,6 +183,26 @@ def cmd_mymeter_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mymeter_browser_download(args: argparse.Namespace) -> int:
+    if args.env_file:
+        load_env_file(args.env_file)
+    username = os.getenv(args.username_env)
+    password = os.getenv(args.password_env)
+    if bool(username) != bool(password):
+        raise ValueError(f"set both {args.username_env} and {args.password_env}, or neither")
+    session = MyMeterBrowserSession(args.base_url, args.user_data_dir, headless=not args.headed)
+    replay = with_overrides(load_replay_request(args.request), args.start, args.end, args.use_captured_token)
+    out = session.download(
+        replay,
+        args.output,
+        context_path=args.context_path,
+        username=username,
+        password=password,
+    )
+    print(f"Downloaded {out}")
+    return 0
+
+
 def _read_login_env(args: argparse.Namespace) -> tuple[str, str]:
     if args.env_file:
         load_env_file(args.env_file)
@@ -242,6 +264,13 @@ def build_parser() -> argparse.ArgumentParser:
     mymeter = sub.add_parser("mymeter-download", help="Replay an authenticated MyMeter export request")
     add_mymeter_download_args(mymeter)
     mymeter.set_defaults(func=cmd_mymeter_download)
+
+    browser_download = sub.add_parser(
+        "mymeter-browser-download",
+        help="Replay a MyMeter export request from inside a persistent browser profile",
+    )
+    add_mymeter_browser_download_args(browser_download)
+    browser_download.set_defaults(func=cmd_mymeter_browser_download)
 
     login_check = sub.add_parser("mymeter-login-check", help="Try direct MyMeter username/password login")
     add_mymeter_login_args(login_check)

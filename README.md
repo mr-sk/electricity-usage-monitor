@@ -114,6 +114,24 @@ python -m electricity_monitor mymeter-download \
   --output data/latest.csv
 ```
 
+Some portals reject plain HTTP cookie replay sooner than they reject an active
+browser profile. In that case, run the same replay request from inside the
+persistent browser profile:
+
+```sh
+python -m electricity_monitor mymeter-browser-download \
+  --base-url https://mysmartenergy.psegliny.com \
+  --user-data-dir private/mymeter-browser \
+  --context-path /Dashboard/ \
+  --request private/download-request.json \
+  --output data/latest.csv
+```
+
+Pass `--env-file` if you want the browser session to attempt a normal login
+with `MYMETER_USERNAME` and `MYMETER_PASSWORD` before downloading. If the portal
+requires reCAPTCHA, MFA, or other manual checks, the command fails clearly
+instead of writing a login page over the usage file.
+
 `download-request.json` describes the authenticated request to replay:
 
 ```json

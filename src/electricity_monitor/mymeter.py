@@ -98,6 +98,11 @@ def cookie_header_from_playwright_storage(path: Union[str, Path], base_url: str)
     return "; ".join(pairs)
 
 
+def _looks_like_login_page(content: str) -> bool:
+    lowered = content.lower()
+    return 'name="loginpassword"' in lowered or "/home/login" in lowered or "g-recaptcha-response" in lowered
+
+
 def _looks_like_html(body: bytes) -> bool:
     sample = body[:4096].decode("utf-8", errors="ignore").lstrip().lower()
     return sample.startswith("<!doctype html") or sample.startswith("<html") or "<form" in sample and "/home/login" in sample
@@ -112,6 +117,24 @@ def _write_download_body(output: Union[str, Path], body: bytes) -> Path:
     tmp_path.write_bytes(body)
     tmp_path.replace(out_path)
     return out_path
+
+
+def _browser_fetch_headers(headers: dict[str, str]) -> dict[str, str]:
+    forbidden = {
+        "authorization",
+        "connection",
+        "content-length",
+        "cookie",
+        "host",
+        "origin",
+        "referer",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "upgrade-insecure-requests",
+        "user-agent",
+    }
+    return {key: value for key, value in headers.items() if key.lower() not in forbidden}
 
 
 class MyMeterSession:
@@ -170,6 +193,128 @@ class MyMeterSession:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"download HTTP error {exc.code}: {body}") from exc
+        return _write_download_body(output, body)
+
+
+class MyMeterBrowserSession:
+    def __init__(self, base_url: str, user_data_dir: Union[str, Path], headless: bool = True) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.user_data_dir = str(user_data_dir)
+        self.headless = headless
+
+    def _absolute_url(self, url: str) -> str:
+        return urllib.parse.urljoin(self.base_url + "/", url)
+
+    def _login_if_needed(self, page, username: Optional[str], password: Optional[str]) -> None:
+        content = page.content()
+        if not _looks_like_login_page(content):
+            return
+        if not username or not password:
+            raise RuntimeError("browser profile is not authenticated; refresh the MySmartEnergy session")
+
+        try:
+            page.locator("#LoginEmail").fill(username, timeout=5000)
+            page.locator("#LoginPassword").fill(password, timeout=5000)
+        except Exception as exc:
+            raise RuntimeError("browser login form changed; refresh the MySmartEnergy session manually") from exc
+
+        clicked = False
+        for selector in (
+            "#loginButton",
+            "button[type=submit]",
+            "input[type=submit]",
+            "button:has-text('Log In')",
+            "button:has-text('Login')",
+        ):
+            locator = page.locator(selector).first
+            try:
+                if locator.count():
+                    locator.click(timeout=5000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            page.locator("#LoginPassword").press("Enter", timeout=5000)
+
+        try:
+            page.wait_for_load_state("networkidle", timeout=30000)
+        except Exception:
+            pass
+        page.wait_for_timeout(3000)
+        if _looks_like_login_page(page.content()):
+            raise RuntimeError("browser login did not complete; captcha, MFA, or login form may need manual refresh")
+
+    def download(
+        self,
+        replay: ReplayRequest,
+        output: Union[str, Path],
+        context_path: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> Path:
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            raise RuntimeError("install optional browser dependencies: python -m pip install -e '.[browser]'")
+
+        url = self._absolute_url(replay.url)
+        token_url = self._absolute_url(context_path or _token_context_path(replay.url))
+        data = dict(replay.data or {})
+
+        with sync_playwright() as p:
+            context = p.chromium.launch_persistent_context(
+                self.user_data_dir,
+                headless=self.headless,
+                accept_downloads=True,
+            )
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.goto(token_url, wait_until="domcontentloaded", timeout=60000)
+                self._login_if_needed(page, username, password)
+                content = page.content()
+
+                if replay.include_request_verification_token:
+                    parser = TokenParser()
+                    parser.feed(content)
+                    if parser.token:
+                        data["__RequestVerificationToken"] = parser.token
+
+                result = page.evaluate(
+                    """async ({url, method, headers, data}) => {
+                        const fetchHeaders = {...headers};
+                        let body = undefined;
+                        if (data && Object.keys(data).length) {
+                            body = new URLSearchParams(data).toString();
+                            fetchHeaders["Content-Type"] = fetchHeaders["Content-Type"] || "application/x-www-form-urlencoded";
+                        }
+                        const response = await fetch(url, {
+                            method,
+                            headers: fetchHeaders,
+                            body,
+                            credentials: "include",
+                            redirect: "follow",
+                        });
+                        return {
+                            status: response.status,
+                            text: await response.text(),
+                        };
+                    }""",
+                    {
+                        "url": url,
+                        "method": replay.method,
+                        "headers": _browser_fetch_headers(replay.headers),
+                        "data": data,
+                    },
+                )
+            finally:
+                context.close()
+
+        status = int(result.get("status", 0))
+        body = str(result.get("text", "")).encode("utf-8")
+        if status >= 400:
+            preview = body.decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"download HTTP error {status}: {preview}")
         return _write_download_body(output, body)
 
 
@@ -307,6 +452,21 @@ def add_mymeter_download_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start", help="Override export form Start date, YYYY-MM-DD")
     parser.add_argument("--end", help="Override export form End date, YYYY-MM-DD")
     parser.add_argument("--use-captured-token", action="store_true", help="Do not refresh __RequestVerificationToken before replay")
+
+
+def add_mymeter_browser_download_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--user-data-dir", required=True, help="Persistent Playwright browser profile directory")
+    parser.add_argument("--request", required=True, help="JSON replay request describing the export endpoint")
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--context-path", help="Authenticated page to load before replaying the export request")
+    parser.add_argument("--env-file", help="Optional .env file containing MYMETER_USERNAME and MYMETER_PASSWORD")
+    parser.add_argument("--username-env", default="MYMETER_USERNAME")
+    parser.add_argument("--password-env", default="MYMETER_PASSWORD")
+    parser.add_argument("--start", help="Override export form Start date, YYYY-MM-DD")
+    parser.add_argument("--end", help="Override export form End date, YYYY-MM-DD")
+    parser.add_argument("--use-captured-token", action="store_true", help="Do not refresh __RequestVerificationToken before replay")
+    parser.add_argument("--headed", action="store_true", help="Show the browser while downloading")
 
 
 def add_mymeter_login_args(parser: argparse.ArgumentParser) -> None:
